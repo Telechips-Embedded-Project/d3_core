@@ -1,0 +1,16 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <signal.h>
+#include <string.h>
+#include <pthread.h>
+#include <alsa/asoundlib.h>
+#include <cjson/cJSON.h>
+#include "../include/system_status.h"
+#include "../include/shm_manager.h"
+#include "../include/device_ctrl.h"
+#include "../include/fifo_thread.h"
+#include "../include/json_utils.h"
+#include "../include/tts_utils.h"
+#include "../include/network_threads.h"
+#include "../include/sensor_ctrl.h"
+#include "../include/mydb.h"
