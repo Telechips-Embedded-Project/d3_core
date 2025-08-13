@@ -1,0 +1,1 @@
+cmd_/home/jsy/sdk_subcore/work/mailbox/driver/mailbox_driver.mod := { echo  /home/jsy/sdk_subcore/work/mailbox/driver/mailbox_driver.o;  echo; } > /home/jsy/sdk_subcore/work/mailbox/driver/mailbox_driver.mod

@@ -1,0 +1,2 @@
+/home/jsy/sdk_subcore/work/mailbox/driver/mailbox_driver.o
+

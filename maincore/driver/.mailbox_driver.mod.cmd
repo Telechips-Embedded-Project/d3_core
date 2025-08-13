@@ -1,0 +1,1 @@
+cmd_/home/jsy/yocto-sdk-populate-cjson/work/mailbox/driver/mailbox_driver.mod := { echo  /home/jsy/yocto-sdk-populate-cjson/work/mailbox/driver/mailbox_driver.o;  echo; } > /home/jsy/yocto-sdk-populate-cjson/work/mailbox/driver/mailbox_driver.mod

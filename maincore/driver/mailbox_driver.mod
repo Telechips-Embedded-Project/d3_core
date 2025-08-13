@@ -1,0 +1,2 @@
+/home/jsy/yocto-sdk-populate-cjson/work/mailbox/driver/mailbox_driver.o
+
