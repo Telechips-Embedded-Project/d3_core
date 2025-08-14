@@ -1,5 +1,5 @@
 #include "../include/tts_utils.h"
-//#include "../include/main.h"
+#include "../include/main.h"
 
 #define WAV_HEADER_SIZE 44
 #define BUFFER_SIZE 4096

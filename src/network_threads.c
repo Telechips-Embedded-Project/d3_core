@@ -20,7 +20,9 @@
 #include "../include/network_threads.h" // shm_ptr, shm_mutex 정의 포함
 
 #define CAN_INTERFACE "can0"
-// --- Pi1로부터 BitNet 답변 수신---
+
+
+// --- LLM TOPST로부터 BitNet 답변 수신---
 void *tcp_rx_thread(void *arg) {
     char message[TCP_BUF_SIZE];
     int hServSock, hClntSock;
@@ -49,7 +51,7 @@ void *tcp_rx_thread(void *arg) {
     printf("[TCP RX] Listening on port %d...\n", 60003); fflush(stdout);
 
     for (;;) {
-        clntAdrSize = sizeof(clntAdr);  // ★ accept() 직전마다 초기화
+        clntAdrSize = sizeof(clntAdr);  // accept() 직전마다 초기화
         hClntSock = accept(hServSock, (struct sockaddr*)&clntAdr, &clntAdrSize);
         if (hClntSock < 0) {
             if (errno == EINTR) continue;  // 시그널이면 재시도
