@@ -22,6 +22,6 @@ typedef struct {
     char svalue[16];       // "red","yellow","green","rainbow","off" / "low","mid","high"
 } command_t;
 
-int parse_command_json(const char *json_str, command_t *cmd);
+int parse_gui_command_json(const char *json_str, command_t *cmd);
 char* extract_json(const char *input);
-void handle_device_control(const char* raw_json);
+void dispatch_voice_command_json(const char* raw_json);

@@ -90,7 +90,7 @@ void *tcp_rx_thread(void *arg) {
                     }
                     else{
                         pthread_mutex_lock(&shm_mutex);
-                        handle_device_control(message);
+                        dispatch_voice_command_json(message);
                         pthread_mutex_unlock(&shm_mutex);
                     }
                 }

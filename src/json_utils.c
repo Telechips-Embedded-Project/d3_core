@@ -80,33 +80,6 @@ static bool parse_ac_level(const char* s, int* out) {
     return false;
 }
 
-// --- 위쪽 공용 헬퍼로 추가 ---
-static bool parse_wiper_mode_from_value(const cJSON *value, int *out_mode) {
-    if (!out_mode) return false;
-    if (!value) return false;
-
-    if (cJSON_IsString(value) && value->valuestring) {
-        const char *v = value->valuestring;
-        if (!strcasecmp(v, "off"))  { *out_mode = 0; return true; }
-        if (!strcasecmp(v, "slow")) { *out_mode = 1; return true; } // slow=1
-        if (!strcasecmp(v, "fast")) { *out_mode = 2; return true; } // fast=2
-        // 숫자 문자열도 허용(0/1/2)
-        char *endp = NULL; errno = 0;
-        long m = strtol(v, &endp, 10);
-        if (errno == 0 && endp && *endp == '\0' && m >= 0 && m <= 2) {
-            *out_mode = (int)m; return true;
-        }
-        return false;
-    }
-
-    if (cJSON_IsNumber(value)) {
-        int m = (int)value->valuedouble;
-        if (m >= 0 && m <= 2) { *out_mode = m; return true; }
-        return false;
-    }
-
-    return false;
-}
 // cJSON value -> 문자열로 추출 (문자/숫자 모두 허용)
 static bool get_value_str_from_json(const cJSON *jv, char *out, size_t n) {
     if (!jv) return false;
@@ -124,7 +97,7 @@ static bool get_value_str_from_json(const cJSON *jv, char *out, size_t n) {
 
 
 // ==== fifo 명령 파싱 ==== // 
-int parse_command_json(const char *json_str, command_t *cmd)
+int parse_gui_command_json(const char *json_str, command_t *cmd)
 {
 	cJSON *root = cJSON_Parse(json_str);
 	if (!root)
@@ -159,12 +132,6 @@ int parse_command_json(const char *json_str, command_t *cmd)
 		{
 			cmd->device = DEVICE_WIPER;
 		}
-		/*
-		else if (strcmp(device->valuestring, "music") == 0)
-		{
-			cmd->device = DEVICE_MUSIC;
-		}
-		*/
 		else
 		{
 			cmd->device = DEVICE_UNKNOWN;
@@ -298,11 +265,38 @@ static int decide_ac_level_from_target(int current_temp, int target_temp) {
     return 3;                               // high
 }
 
+// FIFO 위치 수정 필요.
+// JSON 한 줄을 FIFO로 전송: {"device":"music","command":"play","value":"..."}\n
+static int fifo_send_music_json(const char *command, const char *track_opt) {
+    int fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        perror("[MUSIC][FIFO] open for write");
+        return -1;
+    }
+    char out[256];
+    if (track_opt && *track_opt) {
+        // track/파일명이 있으면 value에 넣어 보냄(옵션)
+        snprintf(out, sizeof(out),
+                 "{\"device\":\"music\",\"command\":\"%s\",\"value\":\"%s\"}\n",
+                 command, track_opt);
+    } else {
+        snprintf(out, sizeof(out),
+                 "{\"device\":\"music\",\"command\":\"%s\"}\n", command);
+    }
+
+    ssize_t w = write(fd, out, strlen(out));
+    if (w < 0) {
+        perror("[MUSIC][FIFO] write");
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return 0;
+}
+
 // === 음성 명령 파싱 ====  
 // dispatcher / 명령LLM / 대화LLM에서 오는 내용 해석해서 수행
-// 없는 명령일 경우 tts 출력하는 로직 필요.
-// 상태 물어보는 질문일 경우 shared 메모리 참고해서 출력하는 로직 필요.
-void handle_device_control(const char* raw_json) {
+void dispatch_voice_command_json(const char* raw_json) {
     const char* cleaned_json = extract_json(raw_json);
     if (!cleaned_json) {
         printf("[ERROR] Invalid JSON format\n");
@@ -512,7 +506,22 @@ void handle_device_control(const char* raw_json) {
 
     // ==== (옵션) MUSIC ====
     else if (str_eq(dev, "music")) {
-        printf("[MUSIC] command=%s (no-op here)\n", cmd); fflush(stdout);
+        const char *track = NULL;
+        if (cJSON_IsString(value) && value->valuestring && *value->valuestring) {
+            track = value->valuestring; // 선택사항: 트랙/파일명
+        }
+
+        if (icontains(cmd, "play") || icontains(cmd, "turn on") || icontains(cmd, "on")) {
+            printf("[VOICE][MUSIC] forward: play\n");
+            //fifo_send_music_json("play", track);
+        } else if (icontains(cmd, "stop") || icontains(cmd, "turn off") || icontains(cmd, "off")) {
+            printf("[VOICE][MUSIC] forward: stop\n");
+            //fifo_send_music_json("stop", NULL);
+        } else {
+            printf("[VOICE][MUSIC] unknown command: %s\n", cmd);
+            run_piper("Unknown music command. Say play or stop.");
+        }
+        // music은 자동플래그 해제 등 없음
     }
 
     else {

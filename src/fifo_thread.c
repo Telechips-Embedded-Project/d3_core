@@ -34,7 +34,7 @@ void *thread_fifo_rx(void *arg)
 		if (n > 0) {
 			printf("[fifo_rx] received: %s\n", buf);
 
-			if (parse_command_json(buf, &cmd) == 0) {
+			if (parse_gui_command_json(buf, &cmd) == 0) {
 				switch (cmd.device) {
 				case DEVICE_AIRCON:
 					pthread_mutex_lock(&shm_mutex);
