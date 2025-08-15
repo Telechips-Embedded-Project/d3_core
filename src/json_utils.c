@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <cjson/cJSON.h>
 #include <errno.h>
+#include <ctype.h>
+#include <string.h>
+#include <stdbool.h>
 
 /* ===== 파일 전역 헬퍼들 ===== */
 static inline int str_has(const char *s, const char *sub) {
@@ -34,7 +37,93 @@ static inline int get_value_int(cJSON *value, int *out) {
     }
     return 0;
 }
+static bool icontains(const char *s, const char *sub) {
+    if (!s || !sub) return false;
+#ifdef _GNU_SOURCE
+    return strcasestr(s, sub) != NULL;     // glibc/gnu 확장
+#else
+    // 소형 대체 구현 (대소문자 무시 부분 일치)
+    for (const char *p = s; *p; ++p) {
+        const char *a = p, *b = sub;
+        while (*a && *b && tolower((unsigned char)*a) == tolower((unsigned char)*b)) { a++; b++; }
+        if (!*b) return true;
+    }
+    return false;
+#endif
+}
 
+static bool extract_first_int(const char *s, int *out) {
+    if (!s) return false;
+    const char *p = s;
+    while (*p && !isdigit((unsigned char)*p) && *p!='-' ) p++;
+    if (!*p) return false;
+    char *end = NULL;
+    long v = strtol(p, &end, 10);
+    if (p == end) return false;
+    if (out) *out = (int)v;
+    return true;
+}
+// 대소문자 무시 문자열 동등 비교
+static bool istr_eq(const char* a, const char* b) {
+    return a && b && strcasecmp(a, b) == 0;
+}
+
+// "off/low/mid/medium/high/max/min/0~3" → 0~3 매핑
+static bool parse_ac_level(const char* s, int* out) {
+    if (!s || !*s) return false;
+    if (istr_eq(s, "off")) { *out = 0; return true; }
+    if (istr_eq(s, "low") || istr_eq(s, "min")) { *out = 1; return true; }
+    if (istr_eq(s, "mid") || istr_eq(s, "medium")) { *out = 2; return true; }
+    if (istr_eq(s, "high") || istr_eq(s, "max")) { *out = 3; return true; }
+    // 숫자 문자열도 허용: "0","1","2","3"
+    if (strlen(s) == 1 && s[0] >= '0' && s[0] <= '3') { *out = s[0]-'0'; return true; }
+    return false;
+}
+
+// --- 위쪽 공용 헬퍼로 추가 ---
+static bool parse_wiper_mode_from_value(const cJSON *value, int *out_mode) {
+    if (!out_mode) return false;
+    if (!value) return false;
+
+    if (cJSON_IsString(value) && value->valuestring) {
+        const char *v = value->valuestring;
+        if (!strcasecmp(v, "off"))  { *out_mode = 0; return true; }
+        if (!strcasecmp(v, "slow")) { *out_mode = 1; return true; } // slow=1
+        if (!strcasecmp(v, "fast")) { *out_mode = 2; return true; } // fast=2
+        // 숫자 문자열도 허용(0/1/2)
+        char *endp = NULL; errno = 0;
+        long m = strtol(v, &endp, 10);
+        if (errno == 0 && endp && *endp == '\0' && m >= 0 && m <= 2) {
+            *out_mode = (int)m; return true;
+        }
+        return false;
+    }
+
+    if (cJSON_IsNumber(value)) {
+        int m = (int)value->valuedouble;
+        if (m >= 0 && m <= 2) { *out_mode = m; return true; }
+        return false;
+    }
+
+    return false;
+}
+// cJSON value -> 문자열로 추출 (문자/숫자 모두 허용)
+static bool get_value_str_from_json(const cJSON *jv, char *out, size_t n) {
+    if (!jv) return false;
+    if (cJSON_IsString(jv) && jv->valuestring) {
+        snprintf(out, n, "%s", jv->valuestring);
+        return true;
+    }
+    if (cJSON_IsNumber(jv)) {
+        // 정수/실수 모두 "숫자" 문자열로 변환 (레벨 매핑용이면 정수 변환 충분)
+        snprintf(out, n, "%d", (int)jv->valuedouble);
+        return true;
+    }
+    return false;
+}
+
+
+// ==== fifo 명령 파싱 ==== // 
 int parse_command_json(const char *json_str, command_t *cmd)
 {
 	cJSON *root = cJSON_Parse(json_str);
@@ -168,6 +257,10 @@ int parse_command_json(const char *json_str, command_t *cmd)
 	}
 	return 0;
 }
+
+
+
+
 // --- extract_json 함수 ---
 // BitNet에서 들어온 문자열 json { } 내부 추출 
 
@@ -195,7 +288,17 @@ char* extract_json(const char* input) {
 
     return buf;
 }
-// --- handle_device_control 함수 ---  
+
+static int decide_ac_level_from_target(int current_temp, int target_temp) {
+    int delta = current_temp - target_temp;
+    if (delta < 0) delta = -delta;
+
+    if (delta <= 1) return 1; // low
+    if (delta <= 3) return 2; // mid
+    return 3;                               // high
+}
+
+// === 음성 명령 파싱 ====  
 // dispatcher / 명령LLM / 대화LLM에서 오는 내용 해석해서 수행
 // 없는 명령일 경우 tts 출력하는 로직 필요.
 // 상태 물어보는 질문일 경우 shared 메모리 참고해서 출력하는 로직 필요.
@@ -225,35 +328,98 @@ void handle_device_control(const char* raw_json) {
         const char* scope = (cJSON_IsString(value) ? value->valuestring : NULL);
         printf("[QUESTION] command=%s%s%s\n",
                what, scope ? ", value=" : "", scope ? scope : "");
+		
+		    const char *co2_status;
+
+		// 음성 안내
+		switch (shm_ptr->sensor.CO2_flag) {
+			case 0:  co2_status = "normal";   break;
+			case 1:  co2_status = "warning";  break;
+			case 2:  co2_status = "critical"; break;
+			default: co2_status = "unknown";  break;
+		}
+
+		char tts_msg[128];
+		snprintf(tts_msg, sizeof(tts_msg),
+				"Current cabin temperature is %d degrees, humidity is %d percent, and CO2 level is %s.",
+				shm_ptr->sensor.temperature, shm_ptr->sensor.humidity, co2_status);
+		run_piper(tts_msg);
+		
         cJSON_Delete(root);
         return;
     }
-
+	
     // ==== AIRCON ====
     if (str_has(dev, "air")) {
-        if (str_eq(cmd, "set")) {
-            int target = 0;
-            if (get_value_int(value, &target)) {
-                printf("[AIRCON] set target = %d\n", target);
-                // TODO: 목표온도 API가 있으면 사용
-                aircon_control(1, shm_ptr);
-            } else {
-                printf("[AIRCON] set without numeric value -> ignored\n");
+        // 1) 끄기: "off" 또는 "turn off"가 들어가면 무조건 off
+        if (icontains(cmd, "turn off") || icontains(cmd, "off")) {
+            printf("[AIRCON] off \n"); fflush(stdout);
+            aircon_control(0, shm_ptr, 1);
+        }
+
+        // 2) 그 외 on/set/target/temp/degree/turn on 등은 value 우선 해석
+        else if (icontains(cmd, "on") || icontains(cmd, "turn on") ||
+                icontains(cmd, "enable") || icontains(cmd, "start") ||
+                icontains(cmd, "power on") ||
+                icontains(cmd, "set") || icontains(cmd, "target") ||
+                icontains(cmd, "temp") || icontains(cmd, "degree") ||  icontains(cmd, "level") ||
+                extract_first_int(cmd, NULL)) {
+
+            int level = -1;
+            int num = 0;
+            char vstr[32] = {0};
+
+            // value 문자열/숫자 → 우선 해석
+            bool has_vstr   = get_value_str_from_json(value, vstr, sizeof(vstr));
+            bool has_level  = has_vstr && parse_ac_level(vstr, &level);   // "low/mid/high/min/max/0~3"
+            bool has_num    = get_value_int(value, &num) || extract_first_int(cmd, &num); // 숫자 우선
+
+            if (has_level) {
+                // 예: {"command":"on","value":"high"} / {"command":"set","value":"mid"}
+                printf("[AIRCON] on/set -> level %d (%s)\n", level, vstr);
+                aircon_control(level, shm_ptr, 1);
             }
-        } else if (str_eq(cmd, "on")) {
-            printf("[AIRCON] on\n");
-            aircon_control(1, shm_ptr);
-        } else if (str_eq(cmd, "off")) {
-            printf("[AIRCON] off\n");
-            aircon_control(0, shm_ptr);
-        } else {
+           else if (has_num) {
+                if (num >= 0 && num <= 3) {
+                    // 0~3이면 "레벨"로 간주
+                    printf("[AIRCON] on/set -> level %d\n", num);
+                    aircon_control(num, shm_ptr, 1);
+                } else {
+                    // 그 외 숫자는 "목표온도"로 간주 → 현재온도와 비교해 레벨 결정
+                    int cur = shm_ptr ? shm_ptr->sensor.temperature : 25; // fallback 25℃
+                    int lev = decide_ac_level_from_target(cur, num);
+                    int delta = cur - num; if (delta < 0) delta = -delta;
+
+                    printf("[AIRCON] set target_temp = %d (current=%d, Δ=%d) -> level %d\n",
+                        num, cur, delta, lev);
+
+                    // 필요 시 목표온도 상태 저장:
+                    // shm_ptr->aircon.target_temp = num;
+
+                    aircon_control(lev, shm_ptr, 1);
+                }
+            }
+            else {
+                // value가 없고 숫자/레벨도 없으면: 이전 레벨로 켬(없으면 기본 1)
+                int prev = shm_ptr ? shm_ptr->aircon.level : 1;
+                if (prev < 1 || prev > 3) prev = 1;
+                printf("[AIRCON] on (no value) -> restore level %d\n", prev);
+                aircon_control(prev, shm_ptr, 1);
+            }
+        }
+
+        else {
             printf("[AIRCON] unknown command: %s\n", cmd);
         }
+        shm_ptr->user.aircon_autoflag = 0; // 자동 제어 해제 (사용자 수동 개입)
     }
+
+
+
 
     // ==== AMBIENT ====
    else if (str_eq(dev, "ambient")) {
-		if (str_eq(cmd, "on")) {
+		if (str_eq(cmd, "on") || str_eq(cmd, "turn on") || str_eq(cmd, "set")) {
 			const char* color = "green";
 			if (cJSON_IsString(value) && value->valuestring && *value->valuestring) {
 				const char* v = value->valuestring;
@@ -266,7 +432,7 @@ void handle_device_control(const char* raw_json) {
 				else if (str_has(v, "white"))    color = "white";
 				else if (str_has(v, "rainbow"))  color = "rainbow";
 			}
-			ambient_control(0, color, shm_ptr);
+			ambient_control(0, color, shm_ptr, 1);
 		}
 		else if (str_eq(cmd, "brightness")) {
 			const char* b = "mid";
@@ -276,35 +442,37 @@ void handle_device_control(const char* raw_json) {
 				else if (str_has(v, "mid"))  b = "mid";
 				else if (str_has(v, "high")) b = "high";
 			}
-			ambient_control(1, b, shm_ptr);
+			ambient_control(1, b, shm_ptr, 1);
 		}
-		else if (str_eq(cmd, "off")) {
-			ambient_control(0, "off", shm_ptr);
+		else if (str_eq(cmd, "off") || str_eq(cmd, "turn off")) {
+			ambient_control(0, "off", shm_ptr, 1);
 		}
 		else {
 			printf("[AMBIENT] unknown command: %s\n", cmd);
 		}
+        shm_ptr->user.ambient_autoflag = 0;
 	}
 
 
     // ==== WINDOW ====
     else if (str_eq(dev, "window")) {
         if (str_eq(cmd, "open")) {
-            window_control(1, shm_ptr);
+            window_control(1, shm_ptr, 1);
         } else if (str_eq(cmd, "close")) {
-            window_control(2, shm_ptr);
+            window_control(2, shm_ptr, 1);
         } else if (str_eq(cmd, "stop")) {
-            window_control(0, shm_ptr);
+            window_control(0, shm_ptr, 1);
         } else if (str_eq(cmd, "set")) {
             int pos = -1;
             if (get_value_int(value, &pos)) {
-                window_control(pos, shm_ptr);
+                window_control(pos, shm_ptr, 1);
             } else {
                 printf("[WINDOW] set without numeric value -> ignored\n");
             }
         } else {
             printf("[WINDOW] unknown command: %s\n", cmd);
         }
+        shm_ptr->user.window_autoflag = 0;
     }
 
     // ==== WIPER ====
@@ -312,31 +480,28 @@ void handle_device_control(const char* raw_json) {
         int mode = -1;
         if      (str_eq(cmd, "off"))  mode = 0;
         else if (str_eq(cmd, "on"))   mode = 1;
-        else if (str_eq(cmd, "fast")) mode = 1;
-        else if (str_eq(cmd, "slow")) mode = 2;
-        else if (str_eq(cmd, "set")) {
-            if (!get_value_int(value, &mode)) {
-                printf("[WIPER] set without numeric value -> ignored\n");
-            }
-        }
+        else if (str_eq(cmd, "slow")) mode = 1;
+        else if (str_eq(cmd, "fast")) mode = 2;
+        else if (str_eq(cmd, "set")) mode = 1;
 
         if (mode != -1) {
-            wiper_control(mode, shm_ptr);
+            wiper_control(mode, shm_ptr, 1);
         } else {
             printf("[WIPER] unknown command: %s\n", cmd);
         }
+        shm_ptr->user.wiper_autoflag = 0;
     }
 
     // ==== HEADLAMP ====
     else if (str_eq(dev, "headlamp")) {
         if (str_eq(cmd, "on")) {
-            headlamp_control(1, shm_ptr);
+            headlamp_control(1, shm_ptr, 1);
         } else if (str_eq(cmd, "off")) {
-            headlamp_control(0, shm_ptr);
+            headlamp_control(0, shm_ptr, 1);
         } else if (str_eq(cmd, "set")) {
             int lv = -1;
             if (get_value_int(value, &lv)) {
-                headlamp_control(lv, shm_ptr);
+                headlamp_control(lv, shm_ptr, 1);
             } else {
                 printf("[HEADLAMP] set without numeric value -> ignored\n");
             }
@@ -347,11 +512,12 @@ void handle_device_control(const char* raw_json) {
 
     // ==== (옵션) MUSIC ====
     else if (str_eq(dev, "music")) {
-        printf("[MUSIC] command=%s (no-op here)\n", cmd);
+        printf("[MUSIC] command=%s (no-op here)\n", cmd); fflush(stdout);
     }
 
     else {
-        printf("[WARN] Unknown device: %s\n", dev);
+		run_piper("Unknown command. Please say it again.");
+        printf("[WARN] Unknown device: %s\n", dev); fflush(stdout);
     }
 
     cJSON_Delete(root);

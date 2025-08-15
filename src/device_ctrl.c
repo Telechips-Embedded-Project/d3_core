@@ -7,9 +7,10 @@
 #include <stdlib.h>
 #include <signal.h>
 
+
 // 디바이스 제어 함수 
 // 에어컨
-void aircon_control(int level, system_status_t *shm) {
+void aircon_control(int level, system_status_t *shm, int ttsflag) {
     int fd = open(AIRCON_DEVICE_PATH, O_RDWR);
     if (fd < 0) {
         shm->aircon.error_flag = true;
@@ -27,12 +28,24 @@ void aircon_control(int level, system_status_t *shm) {
         shm->aircon.level = cur_level;
         shm->aircon.error_flag = false;
     }
-    shm->user.aircon_autoflag = 0;
+    //shm->user.aircon_autoflag = 0;
     close(fd);
+
+    // tts 출력
+    if (ttsflag == 1) {
+        char tts_msg[64];
+        if(shm->aircon.level == 0){
+            snprintf(tts_msg, sizeof(tts_msg), "aircon off.");
+        }
+        else{
+            snprintf(tts_msg, sizeof(tts_msg), "aircon set to level %d.", shm->aircon.level);
+        }
+        run_piper(tts_msg);
+    }
 }
 
 // 창문
-void window_control(int value, system_status_t *shm) {
+void window_control(int value, system_status_t *shm, int ttsflag) {
     int fd = open(WINDOW_DEVICE_PATH, O_RDWR);
     if (fd < 0) {
         shm->window.error_flag = true;
@@ -49,12 +62,20 @@ void window_control(int value, system_status_t *shm) {
             shm->window.error_flag = true;
         }
     }
-    shm->user.window_autoflag = 0;
+    //shm->user.window_autoflag = 0;
     close(fd);
+
+    if(ttsflag == 1){
+        switch(value){
+            case 0: run_piper("window stopped."); break;
+            case 1: run_piper("window opened."); break;
+            case 2: run_piper("window closed."); break;
+        }
+    }
 }
 
 // 와이퍼 
-void wiper_control(int mode, system_status_t *shm) {
+void wiper_control(int mode, system_status_t *shm, int ttsflag) {
     int fd = open(WIPER_DEVICE_PATH, O_RDWR);
     if (fd < 0) {
         shm->wiper.error_flag = true;
@@ -72,12 +93,20 @@ void wiper_control(int mode, system_status_t *shm) {
         shm->wiper.level = cur_mode;
         shm->wiper.error_flag = false;
     }
-    shm->user.wiper_autoflag = 0;
+    // shm->user.wiper_autoflag = 0;
     close(fd);
+    
+    if(ttsflag == 1){
+        switch(mode){
+            case 0: run_piper("wiper stopped."); break;
+            case 1: run_piper("wiper set to slow."); break; 
+            case 2: run_piper("wiper set to fast."); break;
+        }
+    }
 }
 
 // 헤드램프 
-void headlamp_control(int on, system_status_t *shm) {
+void headlamp_control(int on, system_status_t *shm, int ttsflag) {
     int fd = open(HEADLAMP_DEVICE_PATH, O_RDWR);
     if (fd < 0) {
         shm->headlamp.error_flag = true;
@@ -98,6 +127,13 @@ void headlamp_control(int on, system_status_t *shm) {
         shm->headlamp.error_flag = false;
     }
     close(fd);
+
+    if(ttsflag == 1){
+        switch(value){
+            case 0: run_piper("headlamp off"); break;
+            case 1: run_piper("headlamp on"); break; 
+        }
+    }
 }
 
 // 앰비언트 // "low|mid|high" 고정 매핑
@@ -117,7 +153,7 @@ static const char* map_color_any(const char *sv) {
 
 // AMBIENT
 // value 제거 버전
-void ambient_control(int command_type, const char *svalue, system_status_t *shm) {
+void ambient_control(int command_type, const char *svalue, system_status_t *shm, int ttsflag) {
     int fd = open(AMBIENT_DEVICE_PATH, O_RDWR | O_CLOEXEC);
     if (fd < 0) {
         shm->ambient.error_flag = true;
@@ -129,10 +165,26 @@ void ambient_control(int command_type, const char *svalue, system_status_t *shm)
         // color
         const char *mode_str = map_color_any(svalue);
         ret = ioctl(fd, AMBIENT_SET_MODE, (void*)mode_str);
-    } else if (command_type == 1) {
+
+        if (ret == 0 && ttsflag == 1) {  // ioctl 성공 시에만 안내
+            char tts_msg[96];
+            if (mode_str && strcasecmp(mode_str, "off") == 0) {
+                snprintf(tts_msg, sizeof(tts_msg), "ambient light off.");
+            } else {
+                snprintf(tts_msg, sizeof(tts_msg), "ambient color set to %s.", mode_str ? mode_str : "off");
+            }
+            run_piper(tts_msg);
+        }
+    }
+    else if (command_type == 1) {
         // brightness (low/mid/high)
         int bright = map_fixed_brightness(svalue);
         ret = ioctl(fd, AMBIENT_SET_BRIGHTNESS, &bright);
+        if (ttsflag == 1) {
+            char tts_msg[96];
+            snprintf(tts_msg, sizeof(tts_msg), "ambient level set to %s.", svalue);
+            run_piper(tts_msg);
+        }
     } else {
         close(fd);
         shm->ambient.error_flag = true;
@@ -157,14 +209,14 @@ void ambient_control(int command_type, const char *svalue, system_status_t *shm)
     }
 
     shm->ambient.error_flag = false;
-    strncpy(shm->ambient.color, cur_mode, sizeof(shm->ambient.color)-1);
+    snprintf(shm->ambient.color, sizeof(shm->ambient.color), "%s", cur_mode);
 
     // 20/50/100 기준으로 1/2/3 매핑
     if      (cur_brightness <= 20)  shm->ambient.brightness_level = 1; // low
     else if (cur_brightness <= 60)  shm->ambient.brightness_level = 2; // mid
     else                            shm->ambient.brightness_level = 3; // high
 
-    shm->user.ambient_autoflag = 0;
+    //shm->user.ambient_autoflag = 0;
     close(fd);
 }
 
@@ -172,12 +224,12 @@ void ambient_control(int command_type, const char *svalue, system_status_t *shm)
 void cleanup() {
     printf("\n[SHUTDOWN] Cleaning up and turning off devices...\n");
     pthread_mutex_lock(&shm_mutex);
-    aircon_control(0, shm_ptr);
-    window_control(0, shm_ptr);
-    headlamp_control(0, shm_ptr);
-    wiper_control(0, shm_ptr);
-    ambient_control(0, "off", shm_ptr);
-    ambient_control(1, "low", shm_ptr);
+    aircon_control(0, shm_ptr, 0);
+    window_control(0, shm_ptr, 0);
+    headlamp_control(0, shm_ptr, 0);
+    wiper_control(0, shm_ptr, 0);
+    ambient_control(0, "off", shm_ptr, 0);
+    ambient_control(1, "low", shm_ptr, 0);
     pthread_mutex_unlock(&shm_mutex);
 }
 

@@ -38,31 +38,35 @@ void *thread_fifo_rx(void *arg)
 				switch (cmd.device) {
 				case DEVICE_AIRCON:
 					pthread_mutex_lock(&shm_mutex);
-					aircon_control(cmd.value, shm);
+					aircon_control(cmd.value, shm, 0);
+					shm->user.aircon_autoflag = 0;	 // 자동모드 해제 (사용자 수동 개입)
 					pthread_mutex_unlock(&shm_mutex);
 					break;
 				case DEVICE_WINDOW:
 					pthread_mutex_lock(&shm_mutex);
-					window_control(cmd.value, shm);
+					window_control(cmd.value, shm, 0);
+					shm->user.window_autoflag = 0;
 					pthread_mutex_unlock(&shm_mutex);
 					break;
 				case DEVICE_AMBIENT:
 					pthread_mutex_lock(&shm_mutex);
-					ambient_control(cmd.command, cmd.svalue, shm);
+					ambient_control(cmd.command, cmd.svalue, shm, 0);
+					shm->user.ambient_autoflag = 0;
 					pthread_mutex_unlock(&shm_mutex);
 					break;
 				case DEVICE_HEADLAMP:
 					pthread_mutex_lock(&shm_mutex);
-					headlamp_control(cmd.value, shm);
+					headlamp_control(cmd.value, shm, 0);
 					pthread_mutex_unlock(&shm_mutex);
 					break;
 				case DEVICE_WIPER:
 					pthread_mutex_lock(&shm_mutex);
-					wiper_control(cmd.value, shm);
+					wiper_control(cmd.value, shm, 0);
+					shm->user.wiper_autoflag = 0;
 					pthread_mutex_unlock(&shm_mutex);
 					break;
 				case DEVICE_MUSIC:
-					// music_control(cmd.value, shm); // 구현해야함
+					// music_control(cmd.value, shm);
 					break;
 				default:
 					printf("unknown device\n");

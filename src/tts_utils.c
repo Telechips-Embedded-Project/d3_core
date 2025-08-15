@@ -37,7 +37,12 @@ void run_piper(const char* text) {
     snprintf(cmd, sizeof(cmd), "/home/root/TTS/run_tts.sh %s", temp_input_file);
 
     printf("Executing command: %s\n", cmd);
-    system(cmd);
+    int rc = system(cmd);
+    if (rc == -1) {
+        perror("system() failed");
+    } else if (WIFEXITED(rc) && WEXITSTATUS(rc) != 0) {
+        fprintf(stderr, "TTS script exited with status %d\n", WEXITSTATUS(rc));
+    }
     printf("Shell script finished.\n");
 
     remove(temp_input_file);

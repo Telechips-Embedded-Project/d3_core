@@ -33,6 +33,8 @@ void* auto_sensor_control_thread(void* arg)
     // 자동 개입 상태/복귀용
     int aircon_active   = 0, aircon_prev   = 0;
     int window_active   = 0, window_prev   = 0;
+    int wiper_prev     = 0;
+    int headlight_prev = 0;
 
     // “사용자 자동 플래그”의 전이 감지용
     int aircon_was_auto = 0;
@@ -45,14 +47,12 @@ void* auto_sensor_control_thread(void* arg)
 
     while (1) {
         // ------- 스냅샷 읽기 -------
-        uint8_t temp, humi, CO2_flag, Headlight_flag, Wiper_flag;
+        uint8_t CO2_flag, Headlight_flag, Wiper_flag;
         int aircon_lvl, window_lvl;
         char ambient_color_str[16] = {0};
         user_state_t user;
 
         pthread_mutex_lock(&shm_mutex);
-        temp = shm_ptr->sensor.temperature;
-        humi = shm_ptr->sensor.humidity;
 
         CO2_flag       = shm_ptr->sensor.CO2_flag;
         Headlight_flag = shm_ptr->sensor.Headlight_flag;
@@ -75,10 +75,10 @@ void* auto_sensor_control_thread(void* arg)
             //ambient_prev_brightness = ambient_brightness_now; // 0, 1, 2
         }
         if (user.ambient_autoflag) {
-            ambient_control(0, user.ambient_color, shm_ptr);
+            ambient_control(0, user.ambient_color, shm_ptr, 1);
         }
         if (!user.ambient_autoflag && amb_was_auto) {
-            ambient_control(0, ambient_prev_color, shm_ptr);
+            ambient_control(0, ambient_prev_color, shm_ptr, 1);
         }
         amb_was_auto = user.ambient_autoflag;
 
@@ -90,13 +90,13 @@ void* auto_sensor_control_thread(void* arg)
             int target = (user.aircon_val > 0) ? user.aircon_val : 24;
             int new_lvl = aircon_set_from_target(target, shm_ptr);
             if (!aircon_active || aircon_lvl != new_lvl) {
-                aircon_control(new_lvl, shm_ptr);
+                aircon_control(new_lvl, shm_ptr, 1);
                 aircon_lvl = new_lvl;
                 aircon_active = (new_lvl > 0) ? 1 : 0;
             }
         } else {
             if (aircon_was_auto && aircon_active) {
-                aircon_control(aircon_prev, shm_ptr);
+                aircon_control(aircon_prev, shm_ptr, 1);
             }
             aircon_active = 0;
         }
@@ -113,40 +113,43 @@ void* auto_sensor_control_thread(void* arg)
         if (user.window_autoflag) {
             // 조건: CO2_flag == 2일 때만 창문을 연다. (한 번만 실행)
             if (CO2_flag == 2 && !window_active) {
-                window_control(1, shm_ptr);   // OPEN (프로젝트 매핑에 맞게 조정)
+                window_control(1, shm_ptr, 1);   // OPEN (프로젝트 매핑에 맞게 조정)
                 window_active = 1;
             }
             // CO2_flag != 2인 동안에는 아무 것도 하지 않음(현재 상태 유지)
         } else {
             // autoflag 1 -> 0 전이 시, 자동으로 열어둔 상태였다면 prev로 복구
             if (window_was_auto && window_active) {
-                window_control(window_prev, shm_ptr);
+                window_control(window_prev, shm_ptr, 0);
             }
             window_active = 0;
         }
 
-        // ===== WIPER =====
+       // ===== WIPER =====
         if (user.wiper_autoflag) {
-            // Wiper_flag: 0=off, 1=slow, 2=fast
             if (Wiper_flag == 2) {
-                wiper_control(WIPER_FAST, shm_ptr);
+                wiper_control(WIPER_FAST, shm_ptr, 1);
             } else if (Wiper_flag == 1) {
-                wiper_control(WIPER_SLOW, shm_ptr);
-            } else {
-                wiper_control(WIPER_OFF, shm_ptr);
+                wiper_control(WIPER_SLOW, shm_ptr, 1);
+            } else { // Wiper_flag == 0 → OFF
+                int notify_off = (wiper_prev > 0 && Wiper_flag == 0) ? 1 : 0; // 1→0 하강엣지에만 1
+                wiper_control(WIPER_OFF, shm_ptr, notify_off);
             }
         } else {
-            // autoflag == 0 → 무조건 OFF
-            wiper_control(WIPER_OFF, shm_ptr);
+            // 자동 모드 아님 → OFF. 그래도 "플래그 1→0일 때만 1"
+            int notify_off = (wiper_prev > 0 && Wiper_flag == 0) ? 1 : 0;
+            wiper_control(WIPER_OFF, shm_ptr, notify_off);
         }
+        wiper_prev     = Wiper_flag;
 
         // ===== HEADLAMP =====
         if (Headlight_flag) {
-            headlamp_control(1, shm_ptr);
-        } else{
-            headlamp_control(0, shm_ptr);
+            headlamp_control(1, shm_ptr, 1);
+        } else {
+            int notify_off = (headlight_prev > 0 && Headlight_flag == 0) ? 1 : 0; // 1→0 하강엣지에만 1
+            headlamp_control(0, shm_ptr, notify_off);
         }
-
+        headlight_prev = Headlight_flag;
         usleep(100 * 1000); // 100ms 주기
     }
 

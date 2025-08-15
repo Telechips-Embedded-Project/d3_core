@@ -1,6 +1,7 @@
 #pragma once
 #include "system_status.h"
 #include "device_ctrl.h"
+#include "tts_utils.h"
 
 // 명령 타입 구조 (enum)
 typedef enum {

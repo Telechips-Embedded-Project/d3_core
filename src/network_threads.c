@@ -15,6 +15,7 @@
 #include <sys/types.h>
 #include <pthread.h>
 #include <errno.h>
+#include <strings.h>
 
 #include "../include/json_utils.h"
 #include "../include/network_threads.h" // shm_ptr, shm_mutex 정의 포함
@@ -56,28 +57,48 @@ void *tcp_rx_thread(void *arg) {
             perror("accept() failed");     // 치명적 에러 아니면 계속 listen
             continue;
         }
-        printf("[TCP RX LLM] LLM connected!\n"); fflush(stdout);
+        printf("[TCP RX] voice D3-P connected!\n"); fflush(stdout);
 
         for (;;) {
             strLen = recv(hClntSock, message, TCP_BUF_SIZE - 1, 0);
             if (strLen <= 0) {
                 // 클라이언트 종료(0) 또는 에러(<0) -> 소켓 닫고 새 연결 대기
                 if (strLen < 0) perror("recv() failed");
-                printf("[TCP RX] Client disconnected\n"); fflush(stdout);
+                //printf("[TCP RX] Client disconnected\n"); fflush(stdout);
                 close(hClntSock);
                 break;  // ★ 바깥 for로 나가서 accept() 재진입
             }
 
             message[strLen] = '\0';
-            printf("[TCP RX: BitNet Answer] recv: %s\n", message); fflush(stdout);
+            printf("[TCP RX: JSON format ANSWER] recv: %s\n", message); fflush(stdout);
 
-            // TTS가 블로킹이면 recv 타이밍에 영향 -> 필요시 비동기/스레드로
-            run_piper(message);
-
-            pthread_mutex_lock(&shm_mutex);
-            handle_device_control(message);
-            pthread_mutex_unlock(&shm_mutex);
-
+            cJSON *root = cJSON_Parse(message);
+            if(!root){
+                fprintf(stderr, "[DEBUG] Failed to parse JSON\n");
+            }
+            else {
+                cJSON *dev = cJSON_GetObjectItemCaseSensitive(root, "device");
+                if (cJSON_IsString(dev) && dev->valuestring) {
+                    if (strcasecmp(dev->valuestring, "LLM") == 0) {
+                        cJSON *val = cJSON_GetObjectItemCaseSensitive(root, "value");
+                        if (cJSON_IsString(val) && val->valuestring && val->valuestring[0] != '\0') {
+                            run_piper(val->valuestring);
+                        } else {
+                            // value가 없거나 문자열이 아니면 안내
+                            run_piper("Unknown command. Please say it again.");
+                        }
+                    }
+                    else{
+                        pthread_mutex_lock(&shm_mutex);
+                        handle_device_control(message);
+                        pthread_mutex_unlock(&shm_mutex);
+                    }
+                }
+                else{
+                    fprintf(stderr, "[DEBUG] Invalid JSON\n");
+                }
+                cJSON_Delete(root);
+            } 
             usleep(10000); // 10ms
         }
     }

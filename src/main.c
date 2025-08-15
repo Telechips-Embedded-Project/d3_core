@@ -31,9 +31,9 @@ int main() {
     pthread_t tid[10];
     pthread_create(&tid[0], NULL, thread_fifo_rx, shm_ptr);
     pthread_create(&tid[1], NULL, tcp_rx_thread, NULL);
-    //pthread_create(&tid[2], NULL, can_rx_thread, NULL);
+    pthread_create(&tid[2], NULL, can_rx_thread, NULL);
     /////pthread_create(&tid[3], NULL, tcp_tx_thread, NULL);
-   // pthread_create(&tid[4], NULL, shm_monitor_thread, NULL);
+    pthread_create(&tid[4], NULL, shm_monitor_thread, NULL);
     pthread_create(&tid[5], NULL, auto_sensor_control_thread, NULL);
     ////pthread_create(&tid[5], NULL, emergency_control_thread, NULL);
     tid_size = 7;
