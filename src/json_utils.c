@@ -112,6 +112,15 @@ int parse_gui_command_json(const char *json_str, command_t *cmd)
 
 	if (cJSON_IsString(device) && device->valuestring != NULL)
 	{
+
+        if (strcasecmp(device->valuestring, "navi") == 0) {
+            if (cJSON_IsString(value) && value->valuestring && value->valuestring[0] != '\0'){
+                run_piper(value->valuestring);         
+            }
+            cJSON_Delete(root);
+            return 0;
+        }
+
 		if (strcmp(device->valuestring, "aircon") == 0)
 		{
 			cmd->device = DEVICE_AIRCON;

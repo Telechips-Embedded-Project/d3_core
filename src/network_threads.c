@@ -19,8 +19,23 @@
 
 #include "../include/json_utils.h"
 #include "../include/network_threads.h" // shm_ptr, shm_mutex 정의 포함
-
 #define CAN_INTERFACE "can0"
+
+// tts에서 \n 제거용
+void strip_newline(char *str) {
+    char *src = str, *dst = str;
+    while (*src) {
+        if (*src == '\n') {
+            *dst++ = ' ';   // \n → 공백으로 치환
+            src++;
+            continue;
+        }
+        *dst++ = *src++;
+    }
+    *dst = '\0';
+}
+
+
 // --- Pi1로부터 BitNet 답변 수신---
 void *tcp_rx_thread(void *arg) {
     char message[TCP_BUF_SIZE];
@@ -82,7 +97,15 @@ void *tcp_rx_thread(void *arg) {
                     if (strcasecmp(dev->valuestring, "LLM") == 0) {
                         cJSON *val = cJSON_GetObjectItemCaseSensitive(root, "value");
                         if (cJSON_IsString(val) && val->valuestring && val->valuestring[0] != '\0') {
-                            run_piper(val->valuestring);
+                            char clean_val[512];
+                                strncpy(clean_val, val->valuestring, sizeof(clean_val) - 1);
+                                clean_val[sizeof(clean_val) - 1] = '\0';
+
+                                // 여기서 \n 제거
+                                strip_newline(clean_val);
+
+                                // 이제 깨끗해진 문자열을 run_piper로 넘김
+                                run_piper(clean_val);
                         } else {
                             // value가 없거나 문자열이 아니면 안내
                             run_piper("Unknown command. Please say it again.");
