@@ -2,7 +2,7 @@
 #define SYSTEM_STATUS_H
 
 #include <stdbool.h>
-#include <stdint.h>   // 추가
+#include <stdint.h>
 
 #define SHM_KEY 0x8889
 
@@ -17,9 +17,22 @@ typedef struct {
     bool error_flag;
 } device_state_t;
 
+// Music cmd(STT -> Qt)
+enum {
+    MEDIA_CMD_NONE = 0,
+    MEDIA_CMD_PLAY = 1,
+    MEDIA_CMD_STOP = 2
+};
+
+// Music state
 typedef struct {
-    uint8_t temperature;      // degC
-    uint8_t humidity;         // %
+    uint8_t playing;   /* 0: stop, 1: play */
+    uint8_t cmd_in;    /* MEDIA_CMD_* */
+} media_state_t;
+
+typedef struct {
+    uint8_t temperature;    // degC
+    uint8_t humidity;       // %
     uint8_t CO2_flag;            
     uint8_t Headlight_flag;
     uint8_t Wiper_flag;
@@ -53,9 +66,10 @@ typedef struct {
     device_state_t  headlamp;
     device_state_t  wiper;
     sensor_state_t  sensor;
-    notion_state_t  notion;     //추가
-    uint8_t         speed;      //추가 (0x200)
-    user_state_t    user;       // 추가
+    notion_state_t  notion;
+    uint8_t         speed;      // (0x200)
+    user_state_t    user;
+    media_state_t media;
 } system_status_t;
 
 #endif 

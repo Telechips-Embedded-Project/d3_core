@@ -274,35 +274,6 @@ static int decide_ac_level_from_target(int current_temp, int target_temp) {
     return 3;                               // high
 }
 
-// FIFO 위치 수정 필요.
-// JSON 한 줄을 FIFO로 전송: {"device":"music","command":"play","value":"..."}\n
-static int fifo_send_music_json(const char *command, const char *track_opt) {
-    int fd = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
-    if (fd < 0) {
-        perror("[MUSIC][FIFO] open for write");
-        return -1;
-    }
-    char out[256];
-    if (track_opt && *track_opt) {
-        // track/파일명이 있으면 value에 넣어 보냄(옵션)
-        snprintf(out, sizeof(out),
-                 "{\"device\":\"music\",\"command\":\"%s\",\"value\":\"%s\"}\n",
-                 command, track_opt);
-    } else {
-        snprintf(out, sizeof(out),
-                 "{\"device\":\"music\",\"command\":\"%s\"}\n", command);
-    }
-
-    ssize_t w = write(fd, out, strlen(out));
-    if (w < 0) {
-        perror("[MUSIC][FIFO] write");
-        close(fd);
-        return -1;
-    }
-    close(fd);
-    return 0;
-}
-
 // === 음성 명령 파싱 ====  
 // dispatcher / 명령LLM / 대화LLM에서 오는 내용 해석해서 수행
 void dispatch_voice_command_json(const char* raw_json) {
@@ -515,17 +486,12 @@ void dispatch_voice_command_json(const char* raw_json) {
 
     // ==== (옵션) MUSIC ====
     else if (str_eq(dev, "music")) {
-        const char *track = NULL;
-        if (cJSON_IsString(value) && value->valuestring && *value->valuestring) {
-            track = value->valuestring; // 선택사항: 트랙/파일명
-        }
-
         if (icontains(cmd, "play") || icontains(cmd, "turn on") || icontains(cmd, "on")) {
             printf("[VOICE][MUSIC] forward: play\n");
-            //fifo_send_music_json("play", track);
+            shm_ptr->media.cmd_in = 1;
         } else if (icontains(cmd, "stop") || icontains(cmd, "turn off") || icontains(cmd, "off")) {
             printf("[VOICE][MUSIC] forward: stop\n");
-            //fifo_send_music_json("stop", NULL);
+            shm_ptr->media.cmd_in = 2;
         } else {
             printf("[VOICE][MUSIC] unknown command: %s\n", cmd);
             run_piper("Unknown music command. Say play or stop.");
