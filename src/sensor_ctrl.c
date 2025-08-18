@@ -34,7 +34,6 @@ void* auto_sensor_control_thread(void* arg)
     int aircon_active   = 0, aircon_prev   = 0;
     int window_active   = 0, window_prev   = 0;
     int wiper_prev     = 0;
-    int headlight_prev = 0;
 
     // “사용자 자동 플래그”의 전이 감지용
     int aircon_was_auto = 0;
@@ -75,10 +74,10 @@ void* auto_sensor_control_thread(void* arg)
             //ambient_prev_brightness = ambient_brightness_now; // 0, 1, 2
         }
         if (user.ambient_autoflag) {
-            ambient_control(0, user.ambient_color, shm_ptr, 1);
+            ambient_control(0, user.ambient_color, shm_ptr, 0);
         }
         if (!user.ambient_autoflag && amb_was_auto) {
-            ambient_control(0, ambient_prev_color, shm_ptr, 1);
+            ambient_control(0, ambient_prev_color, shm_ptr, 0);
         }
         amb_was_auto = user.ambient_autoflag;
 
@@ -136,21 +135,22 @@ void* auto_sensor_control_thread(void* arg)
                 wiper_control(WIPER_OFF, shm_ptr, notify_off);
             }
         } else {
-            // 자동 모드 아님 → OFF. 그래도 "플래그 1→0일 때만 1"
             int notify_off = (wiper_prev > 0 && Wiper_flag == 0) ? 1 : 0;
             wiper_control(WIPER_OFF, shm_ptr, notify_off);
         }
         wiper_prev     = Wiper_flag;
 
         // ===== HEADLAMP =====
-        if (Headlight_flag) {
-            headlamp_control(1, shm_ptr, 1);
-        } else {
-            int notify_off = (headlight_prev > 0 && Headlight_flag == 0) ? 1 : 0; // 1→0 하강엣지에만 1
-            headlamp_control(0, shm_ptr, notify_off);
+        static int headlight_prev = -1;  // 미정 상태
+        if (headlight_prev == -1) {
+            headlight_prev = Headlight_flag;
+            headlamp_control(Headlight_flag, shm_ptr, 0);
+        } else if (Headlight_flag != headlight_prev) {
+            // 상태가 바뀐 경우에만 호출
+            int notify_off = (headlight_prev == 1 && Headlight_flag == 0); // 1→0일 때만 알림
+            headlamp_control(Headlight_flag, shm_ptr, notify_off);
+            headlight_prev = Headlight_flag;
         }
-        headlight_prev = Headlight_flag;
-        usleep(100 * 1000); // 100ms 주기
     }
 
     return NULL;
